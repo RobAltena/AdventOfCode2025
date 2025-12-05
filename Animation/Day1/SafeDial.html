@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Safe Dial Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        .safe-container {
+            position: relative;
+            width: 90%;
+            max-width: 800px;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        #safe-bg {
+            width: 100%;
+            height: auto;
+            display: block;
+            pointer-events: none;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        /* Container for the dial, positioned over the safe */
+        .dial-wrapper {
+            position: absolute;
+            /* Vertical Position: Slightly below center (56%) to account for the top screen */
+            top: 56%; 
+            /* Horizontal Position: Dead center */
+            left: 51%;
+            /* Size: Increased to 36% to fit the larger ring of the new safe image */
+            width: 36%; 
+            transform: translate(-50%, -50%);
+            aspect-ratio: 1 / 1;
+            border-radius: 50%;
+            cursor: grab;
+            z-index: 10;
+        }
+
+        .dial-wrapper:active {
+            cursor: grabbing;
+        }
+
+        #dial {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            /* Soft shadow for depth */
+            box-shadow: 0 5px 25px rgba(0,0,0,0.6);
+            /* Transition handled in JS for animation */
+            -webkit-user-drag: none;
+        }
+
+        /* Readout positioned on the safe's screen */
+        .readout {
+            position: absolute;
+            top: 24%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: transparent;
+            color: #4fec4f; /* Green LED color */
+            font-family: 'Courier New', monospace;
+            font-size: 1.8rem;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 20;
+            text-shadow: 0 0 5px #4fec4f; /* Glowing effect */
+        }
+
+        /* Blue Zero Counter (Top Left) */
+        .counter-box {
+            position: absolute;
+            top: 20px;
+            padding: 10px 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 2.5rem;
+            font-weight: bold;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
+            transition: transform 0.1s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1;
+        }
+
+        .counter-box span {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        #zero-counter-display {
+            left: 20px;
+            color: #00bcd4; /* Blue/Cyan */
+            border: 2px solid #00bcd4;
+            box-shadow: 0 0 15px rgba(0, 188, 212, 0.4);
+        }
+
+        /* Orange Click Counter (Top Right) */
+        #click-counter-display {
+            right: 20px;
+            color: #ff9800; /* Orange */
+            border: 2px solid #ff9800;
+            box-shadow: 0 0 15px rgba(255, 152, 0, 0.4);
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            z-index: 100;
+        }
+
+        .btn {
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #555;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            opacity: 1;
+            background-color: #444;
+            border-color: #777;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Blue Counter Top Left (Ends on Zero) -->
+    <div class="counter-box" id="zero-counter-display">
+        <span>Stops on 0</span>
+        <div id="zero-count-val">0</div>
+    </div>
+
+    <!-- Orange Counter Top Right (Clicks to Zero) -->
+    <div class="counter-box" id="click-counter-display">
+        <span>Total Clicks</span>
+        <div id="click-count-val">0</div>
+    </div>
+
+    <div class="safe-container">
+        <!-- Digital readout on the safe's screen -->
+        <div class="readout" id="value-display">50</div>
+
+        <!-- Background Image -->
+        <img src="safe.png" alt="Safe Body" id="safe-bg" onerror="this.style.display='none'; document.body.style.color='white'; document.body.innerText='Image safe.jpg not found';">
+
+        <!-- Rotating Dial -->
+        <div class="dial-wrapper" id="dial-container">
+            <img src="dial.png" alt="Combination Dial" id="dial" onerror="this.src='https://via.placeholder.com/300x300.png?text=Dial'">
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn" id="replay-btn">Replay Sequence</button>
+        <button class="btn" id="download-btn">Download App</button>
+    </div>
+
+    <script>
+        const dialContainer = document.getElementById('dial-container');
+        const dial = document.getElementById('dial');
+        const valueDisplay = document.getElementById('value-display');
+        const replayBtn = document.getElementById('replay-btn');
+        
+        // Counters
+        const zeroCounterDisplay = document.getElementById('zero-counter-display');
+        const zeroCountVal = document.getElementById('zero-count-val');
+        const clickCounterDisplay = document.getElementById('click-counter-display');
+        const clickCountVal = document.getElementById('click-count-val');
+
+        // Input sequence parsed from input.txt
+        const sequenceData = [
+            { dir: 'L', ticks: 68 },
+            { dir: 'L', ticks: 30 },
+            { dir: 'R', ticks: 48 },
+            { dir: 'L', ticks: 5 },
+            { dir: 'R', ticks: 60 },
+            { dir: 'L', ticks: 55 },
+            { dir: 'L', ticks: 1 },
+            { dir: 'L', ticks: 99 },
+            { dir: 'R', ticks: 14 },
+            { dir: 'L', ticks: 82 }
+        ];
+
+        // --- State Management ---
+        // 50 * 3.6 = 180 degrees. 
+        // Start at 50.
+        let startVal = 50;
+        let currentRotation = -(startVal * 3.6); 
+        let previousRotation = currentRotation; // For tracking crossings
+        
+        let isDragging = false;
+        let startAngle = 0;
+        let isAnimating = false;
+        
+        // Counter States
+        let stopZeroHits = 0;  // Counts when stopping on zero
+        let totalClicks = 0;   // Counts every time zero is passed/reached
+        let wasOnZero = false; // Debounce for sitting on zero
+
+        // --- Initialization ---
+        function init() {
+            dial.style.transform = `rotate(${currentRotation}deg)`;
+            updateDisplay(currentRotation);
+            
+            // Auto-start animation after 1 second
+            setTimeout(() => {
+                runSequence();
+            }, 1000);
+        }
+
+        // --- Core Logic ---
+
+        function calculateValue(rotation) {
+            let norm = rotation % 360;
+            if (norm < 0) norm += 360;
+            // Map 360 degrees to 100 units
+            // CW rotation (increasing angle) decreases value
+            // CCW rotation (decreasing angle) increases value
+            return Math.round((360 - norm) / 3.6) % 100;
+        }
+
+        function updateDisplay(rotation) {
+            let val = calculateValue(rotation);
+            valueDisplay.textContent = val.toString().padStart(2, '0');
+
+            // --- Click Counter Logic ---
+            
+            // 1. Entering Zero: Currently 0, but wasn't before.
+            const enteringZero = (val === 0 && !wasOnZero);
+
+            // 2. Crossing/Skipping Zero: Check if we crossed integer boundary of 360
+            // floor(rot/360) gives a "lap" or sector count. If it changes, we crossed 0 (or 360).
+            const currentSector = Math.floor(rotation / 360);
+            const previousSector = Math.floor(previousRotation / 360);
+            const crossedLine = (currentSector !== previousSector);
+
+            // 3. Robust Logic:
+            // - If we Just Entered Zero, count it.
+            // - If we Crossed the Line, we count it ONLY if we weren't already on zero.
+            //   (This prevents counting "Leaving Zero" as a new click).
+            if (enteringZero) {
+                incrementClickCounter();
+            } else if (crossedLine && !wasOnZero) {
+                incrementClickCounter();
+            }
+
+            // Update state
+            wasOnZero = (val === 0);
+            previousRotation = rotation;
+        }
+
+        // --- Counter Helpers ---
+
+        function checkZeroStop(rotation) {
+            let val = calculateValue(rotation);
+            if (val === 0) {
+                incrementStopCounter();
+            }
+        }
+
+        function incrementStopCounter() {
+            stopZeroHits++;
+            zeroCountVal.textContent = stopZeroHits;
+            animateCounter(zeroCounterDisplay);
+        }
+
+        function incrementClickCounter() {
+            totalClicks++;
+            clickCountVal.textContent = totalClicks;
+            animateCounter(clickCounterDisplay);
+        }
+
+        function animateCounter(element) {
+            element.style.transform = "scale(1.2)";
+            setTimeout(() => {
+                element.style.transform = "scale(1)";
+            }, 100);
+        }
+
+        // --- Animation Engine ---
+
+        function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+        async function runSequence() {
+            if (isAnimating) return;
+            isAnimating = true;
+            replayBtn.disabled = true;
+            dialContainer.style.cursor = 'default';
+
+            // Reset to start position 50 just in case user moved it
+            await animateRotate(-(50 * 3.6), 1000);
+            await wait(500);
+
+            for (let move of sequenceData) {
+                let angleDelta = move.ticks * 3.6;
+                let targetRotation = 0;
+
+                if (move.dir === 'L') {
+                    targetRotation = currentRotation + angleDelta;
+                } else {
+                    targetRotation = currentRotation - angleDelta;
+                }
+
+                // Animate
+                await animateRotate(targetRotation, 1500); // 1.5s per move
+                
+                // Check if we ended/stopped on zero
+                checkZeroStop(currentRotation);
+
+                await wait(400); // Small pause between movements
+            }
+
+            isAnimating = false;
+            replayBtn.disabled = false;
+            dialContainer.style.cursor = 'grab';
+        }
+
+        function animateRotate(targetAngle, duration) {
+            return new Promise(resolve => {
+                const start = currentRotation;
+                const change = targetAngle - start;
+                const startTime = performance.now();
+
+                function step(now) {
+                    const elapsed = now - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    
+                    // EaseInOutQuad
+                    const ease = progress < .5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
+                    
+                    currentRotation = start + (change * ease);
+                    dial.style.transform = `rotate(${currentRotation}deg)`;
+                    updateDisplay(currentRotation);
+
+                    if (progress < 1) {
+                        requestAnimationFrame(step);
+                    } else {
+                        currentRotation = targetAngle; // Snap to exact end
+                        dial.style.transform = `rotate(${currentRotation}deg)`;
+                        updateDisplay(currentRotation); // Final update
+                        resolve();
+                    }
+                }
+                requestAnimationFrame(step);
+            });
+        }
+
+        // --- Interaction Logic (Mouse/Touch) ---
+
+        function getAngle(event, element) {
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+            
+            // +90 degrees to align 0 to the top
+            return (Math.atan2(deltaY, deltaX) * (180 / Math.PI)) + 90;
+        }
+
+        function startDrag(e) {
+            if (isAnimating) return;
+            e.preventDefault();
+            isDragging = true;
+            dialContainer.style.cursor = 'grabbing';
+            const clickAngle = getAngle(e, dialContainer);
+            startAngle = clickAngle - currentRotation;
+            previousRotation = currentRotation; // Reset tracking to prevent jump artifacts
+        }
+
+        function rotateDial(e) {
+            if (!isDragging || isAnimating) return;
+            e.preventDefault();
+
+            const angle = getAngle(e, dialContainer);
+            
+            // Calculate new rotation
+            let newRotation = angle - startAngle;
+
+            // Handle wrapping logic for smooth dragging (prevent jumping 360)
+            while (newRotation - currentRotation > 180) newRotation -= 360;
+            while (newRotation - currentRotation < -180) newRotation += 360;
+
+            currentRotation = newRotation;
+            dial.style.transform = `rotate(${currentRotation}deg)`;
+            updateDisplay(currentRotation);
+        }
+
+        function stopDrag() {
+            if (isAnimating) return;
+            if (isDragging) {
+                // If user releases mouse, check if they landed/stopped on zero
+                checkZeroStop(currentRotation);
+            }
+            isDragging = false;
+            dialContainer.style.cursor = 'grab';
+        }
+
+        // --- Event Listeners ---
+
+        dialContainer.addEventListener('mousedown', startDrag);
+        window.addEventListener('mousemove', rotateDial);
+        window.addEventListener('mouseup', stopDrag);
+
+        dialContainer.addEventListener('touchstart', startDrag, { passive: false });
+        window.addEventListener('touchmove', rotateDial, { passive: false });
+        window.addEventListener('touchend', stopDrag);
+
+        replayBtn.addEventListener('click', () => {
+             // Reset counters? Usually 'Total' implies cumulative. 
+             // Comment out if you want reset:
+             // stopZeroHits = 0; zeroCountVal.textContent = 0; 
+             // totalClicks = 0; clickCountVal.textContent = 0;
+             runSequence();
+        });
+
+        document.getElementById('download-btn').addEventListener('click', function() {
+            const htmlContent = document.documentElement.outerHTML;
+            const blob = new Blob([htmlContent], { type: 'text/html' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'safe-dial-app.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>
