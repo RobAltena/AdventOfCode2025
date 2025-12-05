@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AoC 2025 Day 2: Mirror Factory (Smart Jump)</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --belt-color: #16213e;
+            --mirror-color: rgba(100, 200, 255, 0.2);
+            --box-color: #e94560;
+            --text-color: #ffffff;
+            --success: #0f3460;
+            --accent: #4cc9f0;
+        }
+
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* Layout */
+        #factory {
+            position: relative;
+            width: 800px;
+            height: 500px;
+            border: 2px solid #333;
+            background: #0f0f1a;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        /* Top Zone: Conveyor */
+        #generator-zone {
+            height: 50%;
+            position: relative;
+            border-bottom: 2px dashed #333;
+            display: flex;
+            align-items: center;
+        }
+
+        #conveyor {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 20px;
+            background: repeating-linear-gradient(
+                45deg,
+                #333,
+                #333 10px,
+                #222 10px,
+                #222 20px
+            );
+            animation: slide 1s linear infinite;
+        }
+
+        @keyframes slide {
+            from { background-position: 0 0; }
+            to { background-position: 28px 0; }
+        }
+
+        /* The Mirror */
+        #mirror {
+            position: absolute;
+            left: 50%;
+            top: 10%;
+            height: 80%;
+            width: 4px;
+            background: cyan;
+            box-shadow: 0 0 15px cyan;
+            z-index: 10;
+        }
+        
+        #mirror::after {
+            content: "DOUBLER";
+            position: absolute;
+            top: -20px;
+            left: -30px;
+            font-size: 12px;
+            color: cyan;
+        }
+
+        /* Bottom Zone: Validator */
+        #validation-zone {
+            height: 50%;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 20px;
+        }
+
+        #range-gate {
+            width: 300px;
+            height: 100px;
+            border: 4px solid #555;
+            border-top: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.05);
+            transition: border-color 0.3s;
+        }
+
+        #range-info {
+            font-size: 1.2rem;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        #status-light {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #333;
+            margin-top: 10px;
+            box-shadow: 0 0 5px #000;
+        }
+
+        /* The Moving Box (The Number) */
+        .number-box {
+            position: absolute;
+            background: var(--box-color);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+            color: white;
+            font-size: 18px;
+            transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+            z-index: 5;
+            left: 50px; 
+            top: 35%;
+            white-space: nowrap;
+        }
+
+        /* HUD */
+        #hud {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 1.2rem;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background: var(--accent);
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1rem;
+            color: #000;
+        }
+
+        button:hover { background: #fff; }
+
+        /* Animation Classes */
+        .at-mirror {
+            left: 48% !important; /* Slightly before center so it hits mirror */
+        }
+
+        .dropped {
+            top: 75% !important;
+        }
+
+        .absorbed {
+            transform: scale(0);
+            opacity: 0;
+        }
+
+        .rejected {
+            background: #555 !important;
+            transform: translateY(50px) rotate(45deg);
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div>TOTAL: <span id="total-score" style="color:var(--accent)">0</span></div>
+        <button onclick="startAnimation()" id="start-btn">Start Production</button>
+    </div>
+
+    <div id="factory">
+        <div id="generator-zone">
+            <div id="conveyor"></div>
+            <div id="mirror"></div>
+        </div>
+
+        <div id="validation-zone">
+            <div id="range-gate">
+                <div id="range-info">WAITING...</div>
+                <div id="status-light"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- INPUT DATA ---
+        const data = "11-22,95-115,998-1012,1188511880-1188511890,222220-222224,1698522-1698528,446443-446449,38593856-38593862,565653-565659,824824821-824824827,2121212118-2121212124";
+        const ranges = data.split(',');
+
+        // --- STATE ---
+        let totalResult = 0;
+        const slowSpeed = 500; // Visible animation speed
+        const fastSpeed = 50;  // Speed when skipping irrelevant numbers
+
+        // --- DOM ELEMENTS ---
+        const generatorZone = document.getElementById('generator-zone');
+        const rangeDisplay = document.getElementById('range-info');
+        const scoreDisplay = document.getElementById('total-score');
+        const statusLight = document.getElementById('status-light');
+        const gate = document.getElementById('range-gate');
+        const btn = document.getElementById('start-btn');
+
+        // --- UTILS ---
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+        async function startAnimation() {
+            btn.style.display = 'none'; 
+            
+            for (let r of ranges) {
+                let [minValStr, maxValStr] = r.split('-');
+                let minValInt = parseInt(minValStr);
+                let maxValInt = parseInt(maxValStr);
+
+                rangeDisplay.innerText = `Range: ${minValStr} - ${maxValStr}`;
+                gate.style.borderColor = '#555';
+                
+                // --- SMART JUMP OPTIMIZATION ---
+                // Calculate the exact mathematical starting point for x1
+                // This prevents "slugging" through thousands of numbers that are too small.
+                
+                let len = minValStr.length;
+                let x1;
+
+                if (len % 2 === 0) {
+                    // EVEN length: The palindrome logic (repeating x1) works directly.
+                    // Start checking from the prefix of the minimum value.
+                    let halfLen = len / 2;
+                    let prefix = parseInt(minValStr.substring(0, halfLen));
+                    x1 = prefix - 1; 
+                } else {
+                    // ODD length: The problem logic (repeating digits twice) creates EVEN length numbers.
+                    // If min_val is odd length (e.g. 998, len 3), no valid ID exists with len 3.
+                    // The next valid ID must have len 4.
+                    // So x1 must have len 2. Smallest len 2 number is 10.
+                    let targetHalfLen = (len + 1) / 2;
+                    x1 = Math.pow(10, targetHalfLen - 1) - 1;
+                }
+
+                // Safety clamp
+                if (x1 < 0) x1 = 0;
+
+                // Inner Loop
+                while (true) {
+                    x1 = x1 + 1;
+                    
+                    let doubledStr = x1.toString() + x1.toString();
+                    let x = parseInt(doubledStr);
+
+                    // --- VISUALIZATION LOGIC ---
+                    
+                    // Decide animation speed. 
+                    // If strictly inside the range, go slow (showoff mode).
+                    // If outside or just catching up, go fast.
+                    let isTarget = (x >= minValInt && x <= maxValInt);
+                    let currentSpeed = isTarget ? slowSpeed : fastSpeed;
+
+                    // If we are WAY too small (should be rare with smart jump), skip animation entirely
+                    if (x < minValInt && (minValInt - x > 100)) {
+                        continue; 
+                    }
+
+                    // Create the visual box
+                    let box = createBox(x1);
+                    
+                    // 1. Move to Mirror
+                    await sleep(currentSpeed / 2);
+                    box.classList.add('at-mirror');
+                    await sleep(currentSpeed);
+
+                    // 2. THE MIRROR EVENT
+                    box.innerText = doubledStr; 
+                    box.style.background = '#4cc9f0'; 
+                    await sleep(currentSpeed / 2);
+
+                    // 3. Drop to Gate
+                    box.classList.add('dropped');
+                    await sleep(currentSpeed);
+
+                    // 4. CHECK LOGIC
+                    if (x >= minValInt && x <= maxValInt) {
+                        // MATCH!
+                        totalResult += x;
+                        updateScore(totalResult);
+                        
+                        box.style.background = '#0f0';
+                        gate.style.borderColor = '#0f0';
+                        statusLight.style.background = '#0f0';
+                        statusLight.style.boxShadow = '0 0 15px #0f0';
+                        
+                        await sleep(300);
+                        box.classList.add('absorbed');
+                    } else {
+                        // NO MATCH
+                        if (x > maxValInt) {
+                            // TOO BIG - BREAK
+                            box.style.background = 'red';
+                            gate.style.borderColor = 'red';
+                            statusLight.style.background = 'red';
+                            box.innerText = "OVERFLOW";
+                            
+                            await sleep(400);
+                            box.remove();
+                            break; 
+                        } else {
+                            // TOO SMALL
+                            box.style.background = '#555';
+                            box.style.opacity = '0.5'; 
+                            box.classList.add('rejected');
+                        }
+                    }
+
+                    // Cleanup DOM to prevent lag
+                    await sleep(currentSpeed / 2);
+                    if(box.parentNode) box.remove();
+                    statusLight.style.background = '#333';
+                    statusLight.style.boxShadow = 'none';
+                    gate.style.borderColor = '#555';
+                }
+            }
+            
+            rangeDisplay.innerText = "SCAN COMPLETE";
+            rangeDisplay.style.color = "#0f0";
+            gate.style.borderColor = "#0f0";
+        }
+
+        function createBox(text) {
+            const div = document.createElement('div');
+            div.classList.add('number-box');
+            div.innerText = text;
+            generatorZone.appendChild(div);
+            return div;
+        }
+
+        function updateScore(val) {
+            scoreDisplay.innerText = val;
+            scoreDisplay.style.transform = "scale(1.5)";
+            setTimeout(() => scoreDisplay.style.transform = "scale(1)", 200);
+        }
+
+    </script>
+</body>
+</html>
