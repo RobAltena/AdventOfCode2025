@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Data Visualizer</title>
+    <style> 
+        body { margin: 0; overflow: hidden; background-color: #050505; color: white; font-family: sans-serif; } 
+        #loading {
+            position: absolute; top: 12px; left: 12px; right: 12px;
+            background: rgba(0,0,0,0.6); border: 1px solid #222;
+            padding: 12px; border-radius: 6px; max-width: calc(100% - 24px);
+            box-sizing: border-box; z-index: 100;
+        }
+        #loading.hidden { display: none; }
+        #progress-bar { width: 100%; height: 12px; background: #111; border-radius: 6px; overflow: hidden; margin-top: 8px; }
+        #progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#00ffcc,#2be6ff); transition: width 150ms linear; }
+        #progress-text { margin-top: 8px; font-size: 13px; color: #cfcfcf; }
+        #loading-title { font-size: 16px; font-weight: 600; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="loading" aria-live="polite">
+        <div id="loading-title">Loading Data...</div>
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="progress-text">Starting...</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // CONFIGURATION
+        const POINTS_FILE = 'input points.txt';
+        const LINES_FILE = 'input lines.txt';
+        const LINES_PER_FRAME = 5; // Increase this to make the drawing faster
+
+        // UI helpers
+        const loadingEl = document.getElementById('loading');
+        const progressFillEl = document.getElementById('progress-fill');
+        const progressTextEl = document.getElementById('progress-text');
+
+        function setProgress(percent, text) {
+            const pct = Math.max(0, Math.min(100, Math.round(percent)));
+            progressFillEl.style.width = pct + '%';
+            progressTextEl.textContent = text || `${pct}%`;
+        }
+
+        // Fetch with streaming progress reporting
+        async function fetchTextWithProgress(url, onProgress) {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+            const contentLengthHeader = res.headers.get('Content-Length') || res.headers.get('content-length');
+            const total = contentLengthHeader ? parseInt(contentLengthHeader, 10) : NaN;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            const chunks = [];
+            let received = 0;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.length;
+                onProgress && onProgress(received, total);
+            }
+            // concatenate
+            if (chunks.length === 0) return '';
+            let full;
+            if (chunks.length === 1) full = decoder.decode(chunks[0]);
+            else {
+                let length = chunks.reduce((s, c) => s + c.length, 0);
+                const merged = new Uint8Array(length);
+                let offset = 0;
+                for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+                full = decoder.decode(merged);
+            }
+            return full;
+        }
+
+        async function init() {
+            // --- 1. FETCH AND PARSE DATA WITH PROGRESS ---
+            let pointsLoaded = 0, pointsTotal = NaN;
+            let linesLoaded = 0, linesTotal = NaN;
+
+            function updateCombinedProgress(stageText) {
+                // If totals available, compute combined percent, otherwise show per-file percents
+                const totalKnown = !isNaN(pointsTotal) && !isNaN(linesTotal);
+                if (totalKnown) {
+                    const combinedLoaded = pointsLoaded + linesLoaded;
+                    const combinedTotal = pointsTotal + linesTotal;
+                    const pct = (combinedLoaded / combinedTotal) * 100;
+                    setProgress(pct, `${stageText} — ${Math.round(pct)}%`);
+                } else {
+                    // show whichever file is larger or the one currently loading
+                    const pPct = !isNaN(pointsTotal) ? Math.round(pointsLoaded / pointsTotal * 100) : Math.round(pointsLoaded / 1024);
+                    const lPct = !isNaN(linesTotal) ? Math.round(linesLoaded / linesTotal * 100) : Math.round(linesLoaded / 1024);
+                    setProgress(Math.max(0, Math.min(100, (pPct + lPct) / 2)), `${stageText} — pts ${pPct}% / lines ${lPct}%`);
+                }
+            }
+
+            // A. Load Points (with progress)
+            const pointsPromise = fetchTextWithProgress(POINTS_FILE, (loaded, total) => {
+                pointsLoaded = loaded;
+                pointsTotal = total || NaN;
+                updateCombinedProgress('Loading points');
+            });
+
+            // B. Load Lines (with progress)
+            const linesPromise = fetchTextWithProgress(LINES_FILE, (loaded, total) => {
+                linesLoaded = loaded;
+                linesTotal = total || NaN;
+                updateCombinedProgress('Loading lines');
+            });
+
+            // Wait for both
+            const [pointsText, linesText] = await Promise.all([pointsPromise, linesPromise]);
+
+            // Show parsing progress while processing large files
+            setProgress(2, 'Parsing points...');
+            // Parse CSV format: "x,y,z" per line
+            const rawPositions = [];
+            const linesOfPoints = pointsText.trim().split('\n');
+            const totalPointLines = linesOfPoints.length;
+            for (let i = 0; i < totalPointLines; i++) {
+                const line = linesOfPoints[i];
+                // remove any tags like <source> or HTML tags if present
+                const cleanLine = line.replace(/<[^>]*>/g, '').trim();
+                if (cleanLine) {
+                    const parts = cleanLine.split(',').map(s => s.trim());
+                    rawPositions.push(Number(parts[0] || 0), Number(parts[1] || 0), Number(parts[2] || 0));
+                }
+                if (i % 500 === 0) {
+                    setProgress(5 + (i / totalPointLines) * 40, `Parsing points (${i}/${totalPointLines})`);
+                    await Promise.resolve(); // yield to update UI
+                }
+            }
+
+            setProgress(50, 'Parsing lines...');
+            // Parse Python-style list format: "[(0, 19), (0, 7)...]"
+            const cleanLinesText = linesText.replace(/<[^>]*>/g, '') // remove tags
+                                            .replace(/[\[\]\(\)\s]/g, '');   // remove brackets/parens/spaces
+
+            // convert to numeric array
+            const rawIndices = cleanLinesText.length ? cleanLinesText.split(',').map(Number) : [];
+
+            // --- 2. SETUP SCENE ---
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 500000);
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+
+            // --- 3. CREATE GEOMETRY ---
+
+            // A. Points
+            const pointsGeometry = new THREE.BufferGeometry();
+            pointsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(rawPositions, 3));
+
+            pointsGeometry.computeBoundingSphere();
+            const center = pointsGeometry.boundingSphere.center;
+            const radius = pointsGeometry.boundingSphere.radius;
+
+            controls.target.copy(center);
+            camera.position.copy(center);
+            camera.position.z += radius * 2.5;
+            camera.position.y += radius * 0.5;
+            controls.update();
+
+            const pointsMaterial = new THREE.PointsMaterial({ 
+                color: 0x00ffcc, 
+                size: radius / 150, 
+                sizeAttenuation: true 
+            });
+            const pointsMesh = new THREE.Points(pointsGeometry, pointsMaterial);
+            scene.add(pointsMesh);
+
+            // B. Lines (The Super-Buffer Strategy)
+            const lineGeometry = new THREE.BufferGeometry();
+            const linePosArray = new Float32Array(rawIndices.length * 3);
+
+            for (let i = 0; i < rawIndices.length; i++) {
+                const pointIndex = rawIndices[i];
+                linePosArray[i*3]   = rawPositions[pointIndex * 3]     || 0;
+                linePosArray[i*3+1] = rawPositions[pointIndex * 3 + 1] || 0;
+                linePosArray[i*3+2] = rawPositions[pointIndex * 3 + 2] || 0;
+                if (i % 1000 === 0) {
+                    // update parse progress for lines positioning
+                    setProgress(55 + (i / rawIndices.length) * 20, `Preparing line data (${i}/${rawIndices.length})`);
+                    await Promise.resolve();
+                }
+            }
+
+            lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePosArray, 3));
+            lineGeometry.setDrawRange(0, 0);
+
+            const lineMaterial = new THREE.LineBasicMaterial({ 
+                color: 0xffffff, 
+                opacity: 0.3, 
+                transparent: true 
+            });
+            const lineMesh = new THREE.LineSegments(lineGeometry, lineMaterial);
+            scene.add(lineMesh);
+
+            // Hide loading text after ready
+            setProgress(100, 'Ready');
+            setTimeout(() => loadingEl.classList.add('hidden'), 400);
+
+            // --- 4. ANIMATION LOOP ---
+            let currentVertexCount = 0;
+            const totalVertices = rawIndices.length;
+
+            function animate() {
+                requestAnimationFrame(animate);
+
+                if (currentVertexCount < totalVertices) {
+                    currentVertexCount += (LINES_PER_FRAME * 2);
+                    if (currentVertexCount > totalVertices) currentVertexCount = totalVertices;
+                    lineGeometry.setDrawRange(0, currentVertexCount);
+                    // also show a subtle progress bar while drawing
+                    const drawPct = Math.round((currentVertexCount / totalVertices) * 100);
+                    progressFillEl.style.width = `${drawPct}%`;
+                }
+
+                controls.update();
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        }
+
+        // Handle Window Resize (keep simple-friendly reload)
+        window.addEventListener('resize', () => {
+            location.reload();
+        });
+
+        init().catch(err => {
+            console.error(err);
+            progressTextEl.textContent = "Error loading files. Check console (F12).";
+        });
+    </script>
+</body>
+</html>
