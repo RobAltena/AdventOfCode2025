@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Day 11 Graph Visualizer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; }
+        #cy { width: 100vw; height: 100vh; background-color: #fafafa; display: block; }
+        #status {
+            position: absolute; top: 10px; left: 10px; z-index: 999;
+            background: white; padding: 10px 20px; border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); border: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status">Loading data...</div>
+    <div id="cy"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function(){
+            
+            // 1. Fetch the raw text file directly
+            fetch('advent_day11_input.txt')
+                .then(response => {
+                    if (!response.ok) throw new Error("Could not find advent_day11_input.txt");
+                    return response.text();
+                })
+                .then(text => {
+                    // 2. Parse the text into Graph Data
+                    const elements = parseGraphData(text);
+                    initCytoscape(elements);
+                    document.getElementById('status').innerHTML = 
+                        `<strong>Loaded!</strong><br>Nodes: ${elements.nodes}<br>Edges: ${elements.edges}`;
+                })
+                .catch(err => {
+                    document.getElementById('status').innerHTML = 
+                        `<strong style="color:red">Error:</strong> ${err.message}<br>
+                        <em>(Make sure you are running a local server, see below)</em>`;
+                    console.error(err);
+                });
+        });
+
+        function parseGraphData(rawText) {
+            const lines = rawText.split('\n');
+            const elements = [];
+            const addedNodes = new Set();
+
+            lines.forEach(line => {
+                // Skip empty lines or artifacts
+                if (!line.includes(':')) return;
+
+                // Split "source: target target" format
+                const [sourceSide, targetSide] = line.split(':');
+                const source = sourceSide.trim();
+                const targets = targetSide.trim().split(/\s+/); // Split by whitespace
+
+                // Add Source Node
+                if (!addedNodes.has(source)) {
+                    elements.push({ data: { id: source } });
+                    addedNodes.add(source);
+                }
+
+                // Process Targets
+                targets.forEach(target => {
+                    if(!target) return; // Skip empty strings
+                    
+                    // Add Target Node (if not already added)
+                    if (!addedNodes.has(target)) {
+                        elements.push({ data: { id: target } });
+                        addedNodes.add(target);
+                    }
+
+                    // Add Edge
+                    elements.push({
+                        data: {
+                            id: `${source}-${target}`,
+                            source: source,
+                            target: target
+                        }
+                    });
+                });
+            });
+
+            return {
+                nodes: addedNodes.size,
+                edges: elements.length - addedNodes.size,
+                // Cytoscape expects a simple array of objects
+                fullList: elements 
+            };
+        }
+function initCytoscape(parsedData) {
+    var cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: parsedData.fullList,
+
+        style: [
+            // 1. Standard Node Style
+            {
+                selector: 'node',
+                style: {
+                    'background-color': '#607D8B', // Blue-Grey
+                    'label': 'data(id)',
+                    'color': '#333',
+                    'font-size': '10px',
+                    'width': 20, 'height': 20
+                }
+            },
+            // 2. "Hub" Style (High connections)
+            {
+                selector: 'node[[degree > 5]]',
+                style: {
+                    'background-color': '#E91E63', // Pink
+                    'width': 40, 'height': 40,
+                    'font-weight': 'bold',
+                    'color': '#E91E63',
+                    'text-outline-width': 1,
+                    'text-outline-color': '#fff'
+                }
+            },
+            // 3. Edge Style
+            {
+                selector: 'edge',
+                style: {
+                    'width': 1,
+                    'line-color': '#ccc',
+                    'curve-style': 'bezier'
+                }
+            },
+
+            // --- NEW CODE STARTS HERE ---
+            // 4. Custom Highlight for specific nodes
+            {
+                selector: '#out, #you, #svr, #dac, #fft',
+                style: {
+                    'background-color': '#FFD700', // Gold/Yellow
+                    'border-color': '#000',        // Black border
+                    'border-width': 2,
+                    'width': 60,                   // Make them huge
+                    'height': 60,
+                    'font-size': '20px',           // Larger text
+                    'font-weight': 'bold',
+                    'color': '#000',
+                    'z-index': 9999                // Draw on top
+                }
+            }
+            // --- NEW CODE ENDS HERE ---
+        ],
+
+        layout: {
+            name: 'cose',
+            animate: true,
+            randomize: true, 
+            componentSpacing: 100,
+            nodeRepulsion: 400000,
+            gravity: 80
+        }
+    });
+}
+
+    </script>
+</body>
+</html>
