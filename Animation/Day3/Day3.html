@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AoC 2025 Day 3: Nixie Power Bypass</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-color: #050505;
+            --panel-color: #1a1a1a;
+            --nixie-off: #331005; 
+            --nixie-on: #ff4500;
+            --nixie-glow: #ff8c00;
+            --highlight-tens: #00ffff;
+            --highlight-ones: #ff00ff;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--nixie-on);
+            font-family: 'Share Tech Mono', monospace;
+            margin: 0;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        /* --- Header --- */
+        header {
+            width: 98%; /* Full width */
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            border-bottom: 2px solid #333;
+            padding-bottom: 5px;
+            margin-bottom: 10px;
+            flex-shrink: 0; /* Don't shrink the header */
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #888;
+        }
+
+        .status-panel { text-align: right; }
+        .label { font-size: 0.8rem; color: #666; display: block; }
+
+        #total-joltage {
+            font-size: 3rem;
+            line-height: 1;
+            color: var(--nixie-on);
+            text-shadow: 0 0 10px var(--nixie-glow), 0 0 20px var(--nixie-on);
+        }
+
+        /* --- Main Battery Grid --- */
+        #battery-container {
+            width: 100%; /* Use full available width */
+            flex-grow: 1;
+            overflow-y: auto;
+            background-color: var(--panel-color);
+            border: 2px solid #333;
+            padding: 10px;
+            
+            /* Custom Scrollbar */
+            scrollbar-width: thin;
+            scrollbar-color: #444 #111;
+        }
+
+        /* The Row: Now uses flex to stretch across full width */
+        .bank-row {
+            display: flex;
+            width: 100%;
+            justify-content: space-between; /* Distribute digits evenly */
+            margin-bottom: 2px;
+            border-bottom: 1px dashed #222;
+        }
+
+        /* The Digit: Responsive size */
+        .digit {
+            /* KEY CHANGE: 
+               Use viewport width (vw) for font size. 
+               0.6vw ensures ~150 characters fit on a screen comfortably.
+            */
+            font-size: 0.7vw; 
+            
+            flex: 1; /* Each digit takes equal space */
+            text-align: center;
+            color: var(--nixie-off);
+            transition: color 0.1s, text-shadow 0.1s, transform 0.1s;
+            cursor: default;
+            user-select: none;
+            
+            /* Ensure text doesn't break layout */
+            min-width: 0; 
+            line-height: 1.2;
+        }
+
+        .digit.lit {
+            color: var(--nixie-on);
+            text-shadow: 0 0 2px var(--nixie-glow); /* Reduced glow radius for tiny fonts */
+        }
+
+        /* Scanned/Selected states */
+        .digit.tens-selected {
+            color: var(--highlight-tens);
+            text-shadow: 0 0 5px var(--highlight-tens);
+            font-weight: bold;
+            transform: scale(1.5); /* Pop out more since font is small */
+            z-index: 10;
+        }
+
+        .digit.ones-selected {
+            color: var(--highlight-ones);
+            text-shadow: 0 0 5px var(--highlight-ones);
+            font-weight: bold;
+            transform: scale(1.5);
+            z-index: 10;
+        }
+
+        .digit.dim {
+            color: #220a02;
+            text-shadow: none;
+            opacity: 0.2;
+        }
+
+        #loading {
+            text-align: center;
+            margin-top: 50px;
+            font-size: 1.2rem;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink { 50% { opacity: 0.5; } }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div>
+            <h1>Elevator Power Bypass</h1>
+            <span class="label">SYSTEM STATUS: OFFLINE</span>
+        </div>
+        <div class="status-panel">
+            <span class="label">TOTAL OUTPUT</span>
+            <div id="total-joltage">00000</div>
+        </div>
+    </header>
+
+    <div id="battery-container">
+        <div id="loading">INITIALIZING SEQUENCE...</div>
+    </div>
+
+    <script>
+    const container = document.getElementById('battery-container');
+    const loading = document.getElementById('loading');
+    const totalDisplay = document.getElementById('total-joltage');
+    let totalJolts = 0;
+
+    // --- PUZZLE LOGIC ---
+    // Find the pair (i, j) with i < j that maximizes int(str[i])*10 + int(str[j])
+    function solveLine(line) {
+        let maxVal = -1;
+        let bestI = -1;
+        let bestJ = -1;
+
+        // Optimization: We only care about the best possible 'Tens' digit first.
+        // We look for 9s, then 8s, etc. 
+        // Once we find a digit 'd', we find the max digit following it.
+        // We compare that result against the current max.
+        // Since the line can be long, O(N^2) is fine, but we can be smarter if needed.
+        // Given typical AoC input size (~100 chars), brute force is instant.
+        
+        for (let i = 0; i < line.length - 1; i++) {
+            const tens = parseInt(line[i]);
+            
+            // Optimization: If 10*tens + 9 <= maxVal, this 'tens' can't possibly beat the record.
+            // (e.g. if we already found 98, and current digit is 8, max possible is 89. Skip.)
+            if ((tens * 10 + 9) <= maxVal) continue;
+
+            for (let j = i + 1; j < line.length; j++) {
+                const ones = parseInt(line[j]);
+                const val = tens * 10 + ones;
+                
+                if (val > maxVal) {
+                    maxVal = val;
+                    bestI = i;
+                    bestJ = j;
+                }
+            }
+        }
+        return { val: maxVal, i: bestI, j: bestJ };
+    }
+
+    // --- ANIMATION ENGINE ---
+    function startAnimation(lines) {
+        let currentRow = 0;
+        let delay = 200; // Start speed (ms)
+        const minDelay = 10; // Max speed cap (ms)
+
+        function step() {
+            if (currentRow >= lines.length) {
+                // Animation Complete
+                document.querySelector('.label').textContent = "SYSTEM STATUS: ONLINE";
+                document.querySelector('.label').style.color = "#00ff00";
+                return;
+            }
+
+            const line = lines[currentRow];
+            const rowDiv = document.getElementById(`row-${currentRow}`);
+            
+            if (line.trim().length > 1) {
+                // 1. Solve the logic
+                const solution = solveLine(line.trim());
+                
+                // 2. Update the Visuals
+                if (solution.val > -1) {
+                    const digits = rowDiv.children;
+                    
+                    // Highlight the winners
+                    const digit1 = digits[solution.i];
+                    const digit2 = digits[solution.j];
+                    
+                    digit1.className = "digit tens-selected"; // Cyan
+                    digit2.className = "digit ones-selected"; // Magenta
+                    
+                    // Dim everyone else (Pure visual flair)
+                    for (let k = 0; k < digits.length; k++) {
+                        if (k !== solution.i && k !== solution.j) {
+                            digits[k].classList.add('dim');
+                            digits[k].classList.remove('lit');
+                        }
+                    }
+
+                    // 3. Update Score
+                    totalJolts += solution.val;
+                    totalDisplay.textContent = totalJolts;
+                }
+            }
+
+            // 4. Auto-Scroll to keep active row in middle of screen
+            rowDiv.scrollIntoView({ behavior: "auto", block: "center" });
+
+            // 5. Accelerate and Loop
+            currentRow++;
+            // Accelerate by 5% every step until we hit max speed
+            delay = Math.max(minDelay, delay * 0.95); 
+            
+            setTimeout(step, delay);
+        }
+
+        // Kick it off
+        step();
+    }
+
+    // --- INITIALIZATION ---
+    fetch('input.txt')
+        .then(response => {
+            if (!response.ok) throw new Error("Could not load input.txt");
+            return response.text();
+        })
+        .then(text => {
+            loading.remove();
+            const rawLines = text.trim().split('\n');
+            const lines = rawLines.filter(l => l.trim().length > 0);
+            
+            // Build the grid first
+            lines.forEach((line, index) => {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'bank-row';
+                rowDiv.id = `row-${index}`;
+                
+                // Determine width based on line length to keep columns aligned visually if needed
+                // (Optional, flex handles it, but this keeps DOM clean)
+                const chars = line.trim().split('');
+                chars.forEach((char, charIndex) => {
+                    const span = document.createElement('span');
+                    span.className = 'digit lit';
+                    span.textContent = char;
+                    rowDiv.appendChild(span);
+                });
+                container.appendChild(rowDiv);
+            });
+
+            // Start the show
+            setTimeout(() => startAnimation(lines), 1000);
+        })
+        .catch(err => {
+            loading.innerHTML = `<span style="color:red">ERROR: ${err.message}</span><br><br>Use python -m http.server`;
+            console.error(err);
+        });
+</script>
+</body>
+</html>
